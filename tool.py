@@ -2,20 +2,22 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
 # =====================
-# HÀM TÍNH TOÁN
+# 計算関数
 # =====================
-def tinh_rsi(df, so_ngay=14):
+def calc_rsi(df, period=14):
     delta   = df["Close"].diff()
-    tang    = delta.clip(lower=0)
-    giam    = -delta.clip(upper=0)
-    tb_tang = tang.rolling(so_ngay).mean()
-    tb_giam = giam.rolling(so_ngay).mean()
-    rs      = tb_tang / tb_giam
+    gain    = delta.clip(lower=0)
+    loss    = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs      = avg_gain / avg_loss
     return 100 - 100 / (1 + rs)
 
-def tinh_macd(df):
+def calc_macd(df):
     ema12     = df["Close"].ewm(span=12, adjust=False).mean()
     ema26     = df["Close"].ewm(span=26, adjust=False).mean()
     macd      = ema12 - ema26
@@ -23,172 +25,165 @@ def tinh_macd(df):
     histogram = macd - signal
     return macd, signal, histogram
 
-def tinh_tat_ca(df):
+def calc_all(df):
     df["MA20"] = df["Close"].rolling(20).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
-    df["RSI"]  = tinh_rsi(df)
-    df["MACD"], df["Signal"], df["Histogram"] = tinh_macd(df)
+    df["RSI"]  = calc_rsi(df)
+    df["MACD"], df["Signal"], df["Histogram"] = calc_macd(df)
     return df
 
-def phan_tich_volume(df):
-    vol_ht = df["Volume"].iloc[-1]
-    vol_tb = df["Volume"].rolling(20).mean().iloc[-1]
-    gia_tang = df["Close"].iloc[-1] > df["Close"].iloc[-2]
-    vol_lon  = vol_ht > vol_tb
-    if gia_tang and vol_lon:
-        ket_qua = "✅ Giá tăng + Volume lớn — Tích cực"
-    elif gia_tang and not vol_lon:
-        ket_qua = "⚠️ Giá tăng + Volume yếu — Cẩn thận"
-    elif not gia_tang and vol_lon:
-        ket_qua = "🔴 Giá giảm + Volume lớn — Áp lực bán mạnh"
+def analyze_volume(df):
+    vol_now = df["Volume"].iloc[-1]
+    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
+    price_up = df["Close"].iloc[-1] > df["Close"].iloc[-2]
+    vol_high = vol_now > vol_avg
+    if price_up and vol_high:
+        result = "✅ 価格上昇 + 出来高大 — ポジティブ"
+    elif price_up and not vol_high:
+        result = "⚠️ 価格上昇 + 出来高小 — 注意"
+    elif not price_up and vol_high:
+        result = "🔴 価格下落 + 出来高大 — 売り圧力強い"
     else:
-        ket_qua = "⚡ Giá giảm + Volume yếu — Chưa rõ"
-    return ket_qua, vol_ht, vol_tb
+        result = "⚡ 価格下落 + 出来高小 — 不明確"
+    return result, vol_now, vol_avg
 
-def phan_tich_xu_huong(df):
-    gia_moi  = df["Close"].iloc[-1]
-    rsi_moi  = df["RSI"].iloc[-1]
-    ma20_moi = df["MA20"].iloc[-1]
-    ma50_moi = df["MA50"].iloc[-1]
-    tang_5   = (gia_moi - df["Close"].iloc[-5]) / df["Close"].iloc[-5] * 100
-    if rsi_moi > 70 and tang_5 > 5:
-        xu_huong = "🔥 Tăng nóng ngắn hạn — Rủi ro cao"
-    elif gia_moi > ma20_moi and ma20_moi > ma50_moi and rsi_moi < 70:
-        xu_huong = "📈 Tăng bền vững — Tích cực"
-    elif gia_moi < ma20_moi and ma20_moi < ma50_moi:
-        xu_huong = "📉 Giảm bền vững — Thận trọng"
+def analyze_trend(df):
+    price   = df["Close"].iloc[-1]
+    rsi     = df["RSI"].iloc[-1]
+    ma20    = df["MA20"].iloc[-1]
+    ma50    = df["MA50"].iloc[-1]
+    chg5    = (price - df["Close"].iloc[-5]) / df["Close"].iloc[-5] * 100
+    if rsi > 70 and chg5 > 5:
+        trend = "🔥 短期過熱 — リスク高い"
+    elif price > ma20 and ma20 > ma50 and rsi < 70:
+        trend = "📈 安定上昇 — ポジティブ"
+    elif price < ma20 and ma20 < ma50:
+        trend = "📉 安定下落 — 注意"
     else:
-        xu_huong = "↔️ Chưa rõ xu hướng"
-    return xu_huong, tang_5
+        trend = "↔️ トレンド不明確"
+    return trend, chg5
 
-def tinh_khang_cu_ho_tro(df):
-    gia_moi      = df["Close"].iloc[-1]
-    khang_cu_20  = df["High"].rolling(20).max().iloc[-1]
-    ho_tro_20    = df["Low"].rolling(20).min().iloc[-1]
-    khang_cu_50  = df["High"].rolling(50).max().iloc[-1]
-    ho_tro_50    = df["Low"].rolling(50).min().iloc[-1]
-    cach_khang_cu = (khang_cu_20 - gia_moi) / gia_moi * 100
-    cach_ho_tro   = (gia_moi - ho_tro_20)   / gia_moi * 100
-    if cach_khang_cu < 2:
-        nhan_xet = "⚠️ Gần kháng cự — Khó tăng thêm"
-    elif cach_ho_tro < 2:
-        nhan_xet = "✅ Gần hỗ trợ — Ít rủi ro giảm thêm"
+def calc_support_resistance(df):
+    price        = df["Close"].iloc[-1]
+    resistance20 = df["High"].rolling(20).max().iloc[-1]
+    support20    = df["Low"].rolling(20).min().iloc[-1]
+    resistance50 = df["High"].rolling(50).max().iloc[-1]
+    support50    = df["Low"].rolling(50).min().iloc[-1]
+    dist_res     = (resistance20 - price) / price * 100
+    dist_sup     = (price - support20)    / price * 100
+    if dist_res < 2:
+        comment = "⚠️ レジスタンス付近 — 上値重い"
+    elif dist_sup < 2:
+        comment = "✅ サポート付近 — 下値リスク小"
     else:
-        nhan_xet = "⚡ Đang giữa vùng"
-    return khang_cu_20, ho_tro_20, khang_cu_50, ho_tro_50, cach_khang_cu, cach_ho_tro, nhan_xet
+        comment = "⚡ レンジ中間"
+    return resistance20, support20, resistance50, support50, dist_res, dist_sup, comment
 
 # =====================
-# GIAO DIỆN STREAMLIT
+# Streamlit UI
 # =====================
-st.set_page_config(page_title="Tool Chứng Khoán", page_icon="📈", layout="wide")
-st.title("📈 Tool Phân Tích Chứng Khoán")
+st.set_page_config(page_title="株価テクニカル分析", page_icon="📈", layout="wide")
+st.title("📈 株価テクニカル分析ツール")
 
-# Nhập mã + chọn thời gian
 col_input, col_period = st.columns([3, 1])
 with col_input:
-    ma = st.text_input("🔍 Mã cổ phiếu", placeholder="VD: 7203.T, AAPL, BTC-USD")
+    ticker_input = st.text_input("🔍 銘柄コード", placeholder="例：7203.T, AAPL, BTC-USD")
 with col_period:
-    period = st.selectbox("📅 Thời gian", ["3mo", "6mo", "1y", "2y"])
+    period = st.selectbox("📅 期間", ["3mo", "6mo", "1y", "2y"],
+                          format_func=lambda x: {"3mo":"3ヶ月","6mo":"6ヶ月","1y":"1年","2y":"2年"}[x])
 
-nut_phan_tich = st.button("🔍 Phân tích", type="primary")
+btn_analyze = st.button("🔍 分析する", type="primary")
 
-if nut_phan_tich and ma:
-    with st.spinner(f"⏳ Đang tải {ma.upper()}..."):
+if btn_analyze and ticker_input:
+    with st.spinner(f"⏳ {ticker_input.upper()} のデータを取得中..."):
         try:
-            ticker = yf.Ticker(ma.upper())
+            ticker = yf.Ticker(ticker_input.upper())
             df     = ticker.history(period=period)
             info   = ticker.info
 
             if df.empty:
-                st.error(f"❌ Không tìm thấy mã {ma.upper()}")
+                st.error(f"❌ 銘柄 {ticker_input.upper()} が見つかりません")
             else:
-                # Tính toán
-                df = tinh_tat_ca(df)
-                ten = info.get("longName", ma.upper())
+                df  = calc_all(df)
+                name = info.get("longName", ticker_input.upper())
 
-                # Thông tin cơ bản
-                gia_hien_tai  = df["Close"].iloc[-1]
-                gia_cao_nhat  = df["Close"].max()
-                gia_thap_nhat = df["Close"].min()
-                gia_dau       = df["Close"].iloc[0]
-                phan_tram     = (gia_hien_tai - gia_dau) / gia_dau * 100
-                rsi_moi       = df["RSI"].iloc[-1]
-                macd_moi      = df["MACD"].iloc[-1]
-                sig_moi       = df["Signal"].iloc[-1]
-                ma20_moi      = df["MA20"].iloc[-1]
-                ma50_moi      = df["MA50"].iloc[-1]
+                price_now  = df["Close"].iloc[-1]
+                price_high = df["Close"].max()
+                price_low  = df["Close"].min()
+                price_open = df["Close"].iloc[0]
+                pct_change = (price_now - price_open) / price_open * 100
+                rsi_now    = df["RSI"].iloc[-1]
+                macd_now   = df["MACD"].iloc[-1]
+                sig_now    = df["Signal"].iloc[-1]
+                ma20_now   = df["MA20"].iloc[-1]
+                ma50_now   = df["MA50"].iloc[-1]
 
-                # Gọi hàm phân tích
-                vol_ket_qua, vol_ht, vol_tb = phan_tich_volume(df)
-                xu_huong, tang_5            = phan_tich_xu_huong(df)
-                khang_cu_20, ho_tro_20, khang_cu_50, ho_tro_50, \
-                cach_khang_cu, cach_ho_tro, nhan_xet_kc = tinh_khang_cu_ho_tro(df)
+                vol_result, vol_now, vol_avg = analyze_volume(df)
+                trend, chg5                  = analyze_trend(df)
+                r20, s20, r50, s50, d_res, d_sup, sr_comment = calc_support_resistance(df)
 
-                # ── Tiêu đề
-                st.subheader(f"📊 {ten}")
+                # ── 銘柄名
+                st.subheader(f"📊 {name}")
                 st.divider()
 
-                # ── 4 ô thông tin
+                # ── 基本情報
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("💰 Giá hiện tại", f"{gia_hien_tai:,.2f}")
-                c2.metric("📈 Cao nhất",     f"{gia_cao_nhat:,.2f}")
-                c3.metric("📉 Thấp nhất",    f"{gia_thap_nhat:,.2f}")
-                c4.metric("📊 Thay đổi",     f"{phan_tram:+.2f}%")
+                c1.metric("💰 現在値",   f"{price_now:,.2f}")
+                c2.metric("📈 期間高値", f"{price_high:,.2f}")
+                c3.metric("📉 期間安値", f"{price_low:,.2f}")
+                c4.metric("📊 騰落率",   f"{pct_change:+.2f}%")
 
                 st.divider()
 
-                # ── Tín hiệu kỹ thuật
-                st.subheader("📊 Tín hiệu kỹ thuật")
+                # ── テクニカルシグナル
+                st.subheader("📊 テクニカルシグナル")
                 c5, c6, c7 = st.columns(3)
 
-                # RSI
-                if rsi_moi > 70:
-                    c5.error(f"RSI: {rsi_moi:.1f}\n⚠️ Quá mua")
-                elif rsi_moi < 30:
-                    c5.success(f"RSI: {rsi_moi:.1f}\n✅ Quá bán")
+                if rsi_now > 70:
+                    c5.error(f"RSI: {rsi_now:.1f}\n⚠️ 買われすぎ")
+                elif rsi_now < 30:
+                    c5.success(f"RSI: {rsi_now:.1f}\n✅ 売られすぎ")
                 else:
-                    c5.info(f"RSI: {rsi_moi:.1f}\n⚡ Trung lập")
+                    c5.info(f"RSI: {rsi_now:.1f}\n⚡ 中立")
 
-                # MACD
-                if macd_moi > sig_moi:
-                    c6.success("MACD\n📈 Tích cực")
+                if macd_now > sig_now:
+                    c6.success("MACD\n📈 ポジティブ")
                 else:
-                    c6.error("MACD\n📉 Tiêu cực")
+                    c6.error("MACD\n📉 ネガティブ")
 
-                # MA
-                if gia_hien_tai > ma20_moi and ma20_moi > ma50_moi:
-                    c7.success("MA\n📈 Xu hướng tăng")
-                elif gia_hien_tai < ma20_moi and ma20_moi < ma50_moi:
-                    c7.error("MA\n📉 Xu hướng giảm")
+                if price_now > ma20_now and ma20_now > ma50_now:
+                    c7.success("移動平均\n📈 上昇トレンド")
+                elif price_now < ma20_now and ma20_now < ma50_now:
+                    c7.error("移動平均\n📉 下降トレンド")
                 else:
-                    c7.info("MA\n↔️ Đi ngang")
+                    c7.info("移動平均\n↔️ 横ばい")
 
                 st.divider()
 
-                # ── 3 chỉ số mới
-                st.subheader("📦 Phân tích nâng cao")
+                # ── 高度な分析
+                st.subheader("📦 詳細分析")
                 c8, c9, c10 = st.columns(3)
 
-                c8.info(f"**Khối lượng**\n{vol_ket_qua}\n\nHT: {vol_ht:,.0f}\nTB20: {vol_tb:,.0f}")
-                c9.info(f"**Xu hướng**\n{xu_huong}\n\nTăng 5 ngày: {tang_5:+.2f}%")
-                c10.info(f"**Kháng cự / Hỗ trợ**\n{nhan_xet_kc}\n\nKháng cự: {khang_cu_20:,.2f} (cách {cach_khang_cu:.1f}%)\nHỗ trợ: {ho_tro_20:,.2f} (cách {cach_ho_tro:.1f}%)")
+                c8.info(f"**出来高分析**\n{vol_result}\n\n現在：{vol_now:,.0f}\n20日平均：{vol_avg:,.0f}")
+                c9.info(f"**トレンド**\n{trend}\n\n5日変化：{chg5:+.2f}%")
+                c10.info(f"**レジスタンス / サポート**\n{sr_comment}\n\nレジスタンス：{r20:,.2f}（差{d_res:.1f}%）\nサポート：{s20:,.2f}（差{d_sup:.1f}%）")
 
                 st.divider()
 
-                # ── Biểu đồ
-                st.subheader("📈 Biểu đồ")
+                # ── チャート
+                st.subheader("📈 チャート")
                 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10))
 
-                ax1.plot(df.index, df["Close"], label="Giá",  color="blue",   linewidth=1.5)
-                ax1.plot(df.index, df["MA20"],  label="MA20", color="orange", linestyle="--")
-                ax1.plot(df.index, df["MA50"],  label="MA50", color="red",    linestyle="--")
-                ax1.set_title(ten)
+                ax1.plot(df.index, df["Close"], label="Price",  color="blue",   linewidth=1.5)
+                ax1.plot(df.index, df["MA20"],  label="MA20",   color="orange", linestyle="--")
+                ax1.plot(df.index, df["MA50"],  label="MA50",   color="red",    linestyle="--")
+                ax1.set_title(name)
                 ax1.legend()
                 ax1.grid(True)
 
                 ax2.plot(df.index, df["RSI"], color="purple", linewidth=1.5)
-                ax2.axhline(y=70, color="red",   linestyle="--", label="Quá mua (70)")
-                ax2.axhline(y=30, color="green", linestyle="--", label="Quá bán (30)")
+                ax2.axhline(y=70, color="red",   linestyle="--", label="Overbought (70)")
+                ax2.axhline(y=30, color="green", linestyle="--", label="Oversold (30)")
                 ax2.set_title("RSI")
                 ax2.set_ylim(0, 100)
                 ax2.legend()
@@ -204,8 +199,8 @@ if nut_phan_tich and ma:
                 ax3.grid(True)
 
                 plt.tight_layout()
-                st.pyplot(fig)        # ✅ dùng st.pyplot thay plt.show()
+                st.pyplot(fig)
                 plt.close()
 
         except Exception as e:
-            st.error(f"❌ Lỗi: {e}")
+            st.error(f"❌ エラー：{e}")
